@@ -1,8 +1,0 @@
-{
-  "rewrites": [
-    {
-      "source": "/api/kucoin/klines",
-      "destination": "https://api.kucoin.com/api/v1/market/candles"
-    }
-  ]
-}

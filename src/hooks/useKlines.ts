@@ -20,31 +20,26 @@ export function useKlines(symbol: string, interval: string, limit: number = 200)
       setLoading(true);
       setError(null);
       try {
-        // Use our backend proxy to bypass CORS
+        // Use Binance API which supports CORS natively
         const response = await fetch(
-          `/api/kucoin/klines?type=${interval}&symbol=${symbol}`
+          `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
         );
         if (!response.ok) {
           throw new Error('Failed to fetch data');
         }
         const json = await response.json();
-        if (json.code !== '200000') {
-          throw new Error(json.msg || 'Failed to fetch data');
-        }
         
         if (isMounted) {
-          const klines: Kline[] = json.data
-            .filter((d: any) => d && d.length >= 5 && !isNaN(parseFloat(d[1])) && !isNaN(parseFloat(d[4])))
-            .map((d: any) => ({
-              time: parseInt(d[0]) * 1000,
-              open: parseFloat(d[1]),
-              close: parseFloat(d[2]),
-              high: parseFloat(d[3]),
-              low: parseFloat(d[4]),
-              volume: parseFloat(d[5] || 0),
-            })).reverse();
+          const klines: Kline[] = json.map((d: any) => ({
+            time: d[0], // Binance time is already in milliseconds
+            open: parseFloat(d[1]),
+            high: parseFloat(d[2]),
+            low: parseFloat(d[3]),
+            close: parseFloat(d[4]),
+            volume: parseFloat(d[5]),
+          }));
           
-          setData(klines.slice(-limit));
+          setData(klines);
         }
       } catch (err: any) {
         if (isMounted) setError(err.message);

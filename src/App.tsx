@@ -40,13 +40,13 @@ const CandlestickShape = (props: any) => {
   );
 };
 
-const SYMBOLS = ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'BNB-USDT'];
+const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
 const INTERVALS = [
-  { label: '5m', value: '5min' },
-  { label: '15m', value: '15min' },
-  { label: '1H', value: '1hour' },
-  { label: '4H', value: '4hour' },
-  { label: '1D', value: '1day' },
+  { label: '5m', value: '5m' },
+  { label: '15m', value: '15m' },
+  { label: '1H', value: '1h' },
+  { label: '4H', value: '4h' },
+  { label: '1D', value: '1d' },
 ];
 
 const STRATEGIES = [
@@ -55,8 +55,8 @@ const STRATEGIES = [
 ];
 
 export default function App() {
-  const [symbol, setSymbol] = useState('BTC-USDT');
-  const [interval, setInterval] = useState('15min');
+  const [symbol, setSymbol] = useState('BTCUSDT');
+  const [interval, setInterval] = useState('15m');
   const [chartType, setChartType] = useState<'candles' | 'line'>('candles');
   const [showRSI, setShowRSI] = useState(false);
   const [showSMA, setShowSMA] = useState(true);
@@ -300,7 +300,7 @@ export default function App() {
                   <div className="text-sm text-[#787B86] flex items-center gap-2 font-medium">
                     <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {interval}</span>
                     <span>•</span>
-                    <span>Kucoin</span>
+                    <span>Binance</span>
                   </div>
                 </div>
                 
