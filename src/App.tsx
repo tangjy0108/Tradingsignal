@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Bar, Cell } from 'recharts';
-import { Activity, Settings, ChevronDown, Plus, Play, ShieldAlert, TrendingUp, Clock, BarChart2, LineChart as LineChartIcon, CandlestickChart } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Bar, Cell, ReferenceArea, ReferenceLine } from 'recharts';
+import { Activity, Settings, ChevronDown, Plus, Play, ShieldAlert, TrendingUp, Clock, BarChart2, LineChart as LineChartIcon, CandlestickChart, AlertCircle } from 'lucide-react';
 import { useKlines } from './hooks/useKlines';
 import { calculateSMA, calculateRSI, calculateMACD } from './lib/indicators';
+import { runStrategy, StrategyResult } from './lib/strategy';
 
 // Custom candlestick shape
 const CandlestickShape = (props: any) => {
@@ -61,7 +62,13 @@ export default function App() {
   const [showRSI, setShowRSI] = useState(false);
   const [showSMA, setShowSMA] = useState(true);
   const [showMACD, setShowMACD] = useState(false);
-  const [strategy, setStrategy] = useState('macd_rsi');
+  const [strategyResult, setStrategyResult] = useState<StrategyResult | null>(null);
+  const [isStrategyRunning, setIsStrategyRunning] = useState(false);
+
+  // Clear strategy result when symbol or interval changes to prevent chart scaling issues
+  useEffect(() => {
+    setStrategyResult(null);
+  }, [symbol, interval]);
 
   const { data: rawData, loading, error } = useKlines(symbol, interval, 150);
 
@@ -90,63 +97,33 @@ export default function App() {
   }, [rawData]);
 
   // Calculate strategy signals
-  const signal = useMemo(() => {
-    if (chartData.length < 2) return null;
-    
-    const latest = chartData[chartData.length - 1];
-    const prev = chartData[chartData.length - 2];
-    
-    let type = 'NEUTRAL';
-    let entry = latest.close;
-    let sl = null;
-    let tp = null;
-    let reason = 'Waiting for setup...';
-
-    if (strategy === 'sma_crossover') {
-      if (prev.sma20 && prev.sma50 && latest.sma20 && latest.sma50) {
-        if (prev.sma20 <= prev.sma50 && latest.sma20 > latest.sma50) {
-          type = 'BUY';
-          reason = 'SMA 20 crossed above SMA 50';
-          sl = entry * 0.98;
-          tp = entry * 1.04;
-        } else if (prev.sma20 >= prev.sma50 && latest.sma20 < latest.sma50) {
-          type = 'SELL';
-          reason = 'SMA 20 crossed below SMA 50';
-          sl = entry * 1.02;
-          tp = entry * 0.96;
-        }
-      }
-    } else if (strategy === 'macd_rsi') {
-      if (prev.macd !== null && prev.macdSignal !== null && latest.macd !== null && latest.macdSignal !== null) {
-        if (prev.macd <= prev.macdSignal && latest.macd > latest.macdSignal) {
-          if (latest.rsi && latest.rsi < 45) {
-            type = 'BUY';
-            reason = 'MACD Bullish Cross + RSI < 45';
-            sl = entry * 0.99;
-            tp = entry * 1.02;
-          }
-        } else if (prev.macd >= prev.macdSignal && latest.macd < latest.macdSignal) {
-          if (latest.rsi && latest.rsi > 55) {
-            type = 'SELL';
-            reason = 'MACD Bearish Cross + RSI > 55';
-            sl = entry * 1.01;
-            tp = entry * 0.98;
-          }
-        }
-      }
+  const handleRunStrategy = async () => {
+    setIsStrategyRunning(true);
+    try {
+      const result = await runStrategy(symbol);
+      setStrategyResult(result);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsStrategyRunning(false);
     }
-
-    return { type, entry, sl, tp, reason, timestamp: latest.timeStr };
-  }, [chartData, strategy]);
+  };
 
   const yDomain = useMemo(() => {
     if (chartData.length === 0) return ['auto', 'auto'];
-    const min = Math.min(...chartData.map(d => d.low));
-    const max = Math.max(...chartData.map(d => d.high));
+    let min = Math.min(...chartData.map(d => d.low));
+    let max = Math.max(...chartData.map(d => d.high));
+    
+    // Include strategy result in yDomain so it's visible
+    if (strategyResult) {
+      min = Math.min(min, strategyResult.target, strategyResult.stop, strategyResult.entry_low);
+      max = Math.max(max, strategyResult.target, strategyResult.stop, strategyResult.entry_high);
+    }
+    
     if (isNaN(min) || isNaN(max)) return ['auto', 'auto'];
     const padding = (max - min) * 0.05;
     return [min - (padding || max * 0.01), max + (padding || max * 0.01)];
-  }, [chartData]);
+  }, [chartData, strategyResult]);
 
   const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : 0;
   const priceChange = chartData.length > 1 ? currentPrice - chartData[chartData.length - 2].close : 0;
@@ -326,6 +303,40 @@ export default function App() {
                       tickLine={false}
                       tickMargin={12}
                     />
+                    
+                    {/* Strategy Visualizations */}
+                    {strategyResult && (
+                      <>
+                        <ReferenceArea 
+                          y1={strategyResult.entry_low} 
+                          y2={strategyResult.entry_high} 
+                          fill={strategyResult.direction === 'LONG' ? '#089981' : '#F23645'} 
+                          fillOpacity={0.15} 
+                        />
+                        <ReferenceLine 
+                          y={strategyResult.price} 
+                          stroke="#2962FF" 
+                          strokeDasharray="4 4" 
+                          strokeWidth={1.5}
+                          label={{ position: 'insideLeft', value: 'Entry Price', fill: '#2962FF', fontSize: 12, fontWeight: 600 }} 
+                        />
+                        <ReferenceLine 
+                          y={strategyResult.stop} 
+                          stroke="#F23645" 
+                          strokeDasharray="4 4" 
+                          strokeWidth={1.5}
+                          label={{ position: 'insideBottomLeft', value: 'Stop', fill: '#F23645', fontSize: 12, fontWeight: 600 }} 
+                        />
+                        <ReferenceLine 
+                          y={strategyResult.target} 
+                          stroke="#089981" 
+                          strokeDasharray="4 4" 
+                          strokeWidth={1.5}
+                          label={{ position: 'insideTopLeft', value: 'Target', fill: '#089981', fontSize: 12, fontWeight: 600 }} 
+                        />
+                      </>
+                    )}
+                    
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', borderRadius: '8px', color: '#D1D4DC', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)' }}
                       itemStyle={{ color: '#D1D4DC', fontSize: '13px', fontWeight: 500 }}
@@ -412,90 +423,74 @@ export default function App() {
         {/* Right Panel - Strategy & Signals */}
         <div className="w-full lg:w-80 bg-[#131722] flex flex-col shrink-0 lg:overflow-y-auto lg:border-l border-[#2A2E39]">
           <div className="p-6 border-b border-[#2A2E39]">
-            <h2 className="text-xs font-bold text-[#787B86] uppercase tracking-widest mb-4">Trading Strategy</h2>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-[#D1D4DC] mb-2">Active Strategy</label>
-                <div className="relative">
-                  <select 
-                    value={strategy}
-                    onChange={(e) => setStrategy(e.target.value)}
-                    className="w-full bg-[#1E222D] border border-[#2A2E39] text-[#D1D4DC] rounded-lg pl-4 pr-10 py-2.5 text-sm outline-none focus:border-[#2962FF] transition-colors appearance-none font-medium"
-                  >
-                    {STRATEGIES.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                  <ChevronDown className="w-4 h-4 text-[#787B86] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                </div>
-              </div>
-              
-              <button className="w-full flex items-center justify-center gap-2 bg-[#1E222D] hover:bg-[#2A2E39] border border-[#2A2E39] text-[#D1D4DC] py-2.5 rounded-lg text-sm font-semibold transition-colors">
-                <Plus className="w-4 h-4" /> Add Custom Script
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xs font-bold text-[#787B86] uppercase tracking-widest">Live Signal</h2>
+              <button 
+                onClick={handleRunStrategy}
+                disabled={isStrategyRunning}
+                className="flex items-center gap-1.5 bg-[#2962FF] hover:bg-[#2962FF]/90 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isStrategyRunning ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <Play className="w-4 h-4" />
+                )}
+                Run Strategy
               </button>
             </div>
-          </div>
-
-          <div className="p-6 flex-1 bg-[#0B0E14]/30">
-            <h2 className="text-xs font-bold text-[#787B86] uppercase tracking-widest mb-4 flex items-center justify-between">
-              Live Signal
-              {signal && signal.type !== 'NEUTRAL' && (
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#2962FF] opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-[#2962FF]"></span>
-                </span>
-              )}
-            </h2>
-
-            {signal ? (
+            
+            {strategyResult ? (
               <div className="space-y-4">
-                {/* Signal Status Card */}
-                <div className={`p-5 rounded-xl border ${
-                  signal.type === 'BUY' ? 'bg-[#089981]/10 border-[#089981]/30' : 
-                  signal.type === 'SELL' ? 'bg-[#F23645]/10 border-[#F23645]/30' : 
-                  'bg-[#1E222D] border-[#2A2E39]'
-                }`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-medium text-[#787B86]">{signal.timestamp}</span>
-                    <span className={`text-sm font-bold px-2.5 py-1 rounded-md ${
-                      signal.type === 'BUY' ? 'bg-[#089981]/20 text-[#089981]' : 
-                      signal.type === 'SELL' ? 'bg-[#F23645]/20 text-[#F23645]' : 
-                      'bg-[#2A2E39] text-[#D1D4DC]'
-                    }`}>
-                      {signal.type}
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-[#787B86]">Time</span>
+                  <span className="text-sm font-medium text-[#D1D4DC]">
+                    {new Date(strategyResult.time).toLocaleString(undefined, {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+                    })}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-[#787B86]">Direction</span>
+                  <span className={`px-2 py-1 rounded text-xs font-bold ${
+                    strategyResult.direction === 'LONG' ? 'bg-[#089981]/10 text-[#089981]' : 'bg-[#F23645]/10 text-[#F23645]'
+                  }`}>
+                    {strategyResult.direction}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-[#787B86]">Regime</span>
+                  <span className="text-sm font-medium text-[#D1D4DC]">{strategyResult.regime}</span>
+                </div>
+                
+                <div className="h-px bg-[#2A2E39] my-4" />
+                
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-[#787B86]">Entry Zone</span>
+                    <span className="text-sm font-mono text-white">
+                      {strategyResult.entry_low.toFixed(2)} - {strategyResult.entry_high.toFixed(2)}
                     </span>
                   </div>
-                  <div className="text-sm text-[#D1D4DC] font-medium leading-relaxed">
-                    {signal.reason}
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-[#787B86]">Target</span>
+                    <span className="text-sm font-mono text-[#089981]">{strategyResult.target.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-[#787B86]">Stop Loss</span>
+                    <span className="text-sm font-mono text-[#F23645]">{strategyResult.stop.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-[#787B86]">Risk/Reward</span>
+                    <span className="text-sm font-mono text-[#D1D4DC]">{strategyResult.rr.toFixed(2)}</span>
                   </div>
                 </div>
-
-                {/* Execution Details */}
-                {signal.type !== 'NEUTRAL' && (
-                  <div className="bg-[#1E222D] rounded-xl border border-[#2A2E39] p-5 space-y-4 shadow-sm">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium text-[#787B86]">Entry Price</span>
-                      <span className="text-sm font-mono font-bold text-[#D1D4DC]">{signal.entry.toFixed(2)}</span>
-                    </div>
-                    <div className="h-px bg-[#2A2E39]" />
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium text-[#787B86]">Take Profit</span>
-                      <span className="text-sm font-mono font-bold text-[#089981]">{signal.tp?.toFixed(2)}</span>
-                    </div>
-                    <div className="h-px bg-[#2A2E39]" />
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium text-[#787B86]">Stop Loss</span>
-                      <span className="text-sm font-mono font-bold text-[#F23645]">{signal.sl?.toFixed(2)}</span>
-                    </div>
-                    
-                    <button className="w-full mt-6 flex items-center justify-center gap-2 bg-[#2962FF] hover:bg-[#1E53E5] text-white py-3 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-[#2962FF]/20">
-                      <Play className="w-4 h-4" /> Execute Trade
-                    </button>
-                  </div>
-                )}
               </div>
             ) : (
-              <div className="text-sm text-[#787B86] text-center py-12 font-medium">
-                Calculating signals...
+              <div className="flex flex-col items-center justify-center py-8 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-[#1E222D] flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6 text-[#787B86]" />
+                </div>
+                <p className="text-sm text-[#787B86]">Click "Run Strategy" to analyze current market conditions.</p>
               </div>
             )}
           </div>
