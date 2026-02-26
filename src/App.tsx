@@ -41,7 +41,7 @@ const CandlestickShape = (props: any) => {
   );
 };
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT'];
 const INTERVALS = [
   { label: '5m', value: '5m' },
   { label: '15m', value: '15m' },
@@ -51,13 +51,14 @@ const INTERVALS = [
 ];
 
 const STRATEGIES = [
-  { id: 'macd_rsi', name: 'MACD + RSI Reversal' },
-  { id: 'sma_crossover', name: 'SMA Crossover' },
+  { id: 'trend_regime', name: 'Trend Regime (Current)' },
+  { id: 'structural_reversal', name: 'Structural Reversal (PRZ)' },
 ];
 
 export default function App() {
   const [symbol, setSymbol] = useState('BTCUSDT');
   const [interval, setInterval] = useState('15m');
+  const [strategyId, setStrategyId] = useState('trend_regime');
   const [chartType, setChartType] = useState<'candles' | 'line'>('candles');
   const [showRSI, setShowRSI] = useState(false);
   const [showSMA, setShowSMA] = useState(true);
@@ -100,7 +101,7 @@ export default function App() {
   const handleRunStrategy = async () => {
     setIsStrategyRunning(true);
     try {
-      const result = await runStrategy(symbol);
+      const result = await runStrategy(symbol, strategyId);
       setStrategyResult(result);
     } catch (err) {
       console.error(err);
@@ -114,10 +115,19 @@ export default function App() {
     let min = Math.min(...chartData.map(d => d.low));
     let max = Math.max(...chartData.map(d => d.high));
     
-    // Include strategy result in yDomain so it's visible
-    if (strategyResult) {
-      min = Math.min(min, strategyResult.target, strategyResult.stop, strategyResult.entry_low);
-      max = Math.max(max, strategyResult.target, strategyResult.stop, strategyResult.entry_high);
+    // Include strategy result in yDomain so it's visible, but only if values are non-zero and signal is active
+    if (strategyResult && !strategyResult.regime.includes('WAITING') && !strategyResult.regime.includes('NO_IMPULSE')) {
+      const values = [
+        strategyResult.target,
+        strategyResult.stop,
+        strategyResult.entry_low,
+        strategyResult.entry_high
+      ].filter(v => v > 0);
+      
+      if (values.length > 0) {
+        min = Math.min(min, ...values);
+        max = Math.max(max, ...values);
+      }
     }
     
     if (isNaN(min) || isNaN(max)) return ['auto', 'auto'];
@@ -304,36 +314,47 @@ export default function App() {
                       tickMargin={12}
                     />
                     
-                    {/* Strategy Visualizations */}
-                    {strategyResult && (
+                    {/* Strategy Visualizations - Only show if signal is active (not waiting) */}
+                    {strategyResult && !strategyResult.regime.includes('WAITING') && !strategyResult.regime.includes('NO_IMPULSE') && (
                       <>
-                        <ReferenceArea 
-                          y1={strategyResult.entry_low} 
-                          y2={strategyResult.entry_high} 
-                          fill={strategyResult.direction === 'LONG' ? '#089981' : '#F23645'} 
-                          fillOpacity={0.15} 
-                        />
-                        <ReferenceLine 
-                          y={strategyResult.price} 
-                          stroke="#2962FF" 
-                          strokeDasharray="4 4" 
-                          strokeWidth={1.5}
-                          label={{ position: 'insideLeft', value: 'Entry Price', fill: '#2962FF', fontSize: 12, fontWeight: 600 }} 
-                        />
-                        <ReferenceLine 
-                          y={strategyResult.stop} 
-                          stroke="#F23645" 
-                          strokeDasharray="4 4" 
-                          strokeWidth={1.5}
-                          label={{ position: 'insideBottomLeft', value: 'Stop', fill: '#F23645', fontSize: 12, fontWeight: 600 }} 
-                        />
-                        <ReferenceLine 
-                          y={strategyResult.target} 
-                          stroke="#089981" 
-                          strokeDasharray="4 4" 
-                          strokeWidth={1.5}
-                          label={{ position: 'insideTopLeft', value: 'Target', fill: '#089981', fontSize: 12, fontWeight: 600 }} 
-                        />
+                        {strategyResult.entry_low > 0 && strategyResult.entry_high > 0 && (
+                          <ReferenceArea 
+                            y1={strategyResult.entry_low} 
+                            y2={strategyResult.entry_high} 
+                            {...({
+                              fill: strategyResult.direction === 'LONG' ? '#089981' : '#F23645',
+                              fillOpacity: 0.15,
+                              stroke: "none"
+                            } as any)}
+                          />
+                        )}
+                        {strategyResult.price > 0 && (
+                          <ReferenceLine 
+                            y={strategyResult.price} 
+                            stroke="#2962FF" 
+                            strokeDasharray="4 4" 
+                            strokeWidth={1.5}
+                            label={{ position: 'insideLeft', value: 'Entry Price', fill: '#2962FF', fontSize: 12, fontWeight: 600 }} 
+                          />
+                        )}
+                        {strategyResult.stop > 0 && (
+                          <ReferenceLine 
+                            y={strategyResult.stop} 
+                            stroke="#F23645" 
+                            strokeDasharray="4 4" 
+                            strokeWidth={1.5}
+                            label={{ position: 'insideBottomLeft', value: 'Stop', fill: '#F23645', fontSize: 12, fontWeight: 600 }} 
+                          />
+                        )}
+                        {strategyResult.target > 0 && (
+                          <ReferenceLine 
+                            y={strategyResult.target} 
+                            stroke="#089981" 
+                            strokeDasharray="4 4" 
+                            strokeWidth={1.5}
+                            label={{ position: 'insideTopLeft', value: 'Target', fill: '#089981', fontSize: 12, fontWeight: 600 }} 
+                          />
+                        )}
                       </>
                     )}
                     
@@ -425,18 +446,32 @@ export default function App() {
           <div className="p-6 border-b border-[#2A2E39]">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xs font-bold text-[#787B86] uppercase tracking-widest">Live Signal</h2>
-              <button 
-                onClick={handleRunStrategy}
-                disabled={isStrategyRunning}
-                className="flex items-center gap-1.5 bg-[#2962FF] hover:bg-[#2962FF]/90 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isStrategyRunning ? (
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <Play className="w-4 h-4" />
-                )}
-                Run Strategy
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <select 
+                    value={strategyId}
+                    onChange={(e) => setStrategyId(e.target.value)}
+                    className="appearance-none bg-[#1E222D] border border-[#2A2E39] text-[#D1D4DC] text-xs rounded-md pl-2 pr-8 py-1.5 cursor-pointer hover:bg-[#2A2E39] transition-colors font-medium outline-none focus:border-[#2962FF]"
+                  >
+                    {STRATEGIES.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[#787B86] pointer-events-none" />
+                </div>
+                <button 
+                  onClick={handleRunStrategy}
+                  disabled={isStrategyRunning}
+                  className="flex items-center gap-1.5 bg-[#2962FF] hover:bg-[#2962FF]/90 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isStrategyRunning ? (
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <Play className="w-4 h-4" />
+                  )}
+                  Run
+                </button>
+              </div>
             </div>
             
             {strategyResult ? (
@@ -457,17 +492,19 @@ export default function App() {
                     {strategyResult.direction}
                   </span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-[#787B86]">Regime</span>
-                  <span className="text-sm font-medium text-[#D1D4DC]">{strategyResult.regime}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm text-[#787B86] shrink-0">Regime</span>
+                  <span className="text-sm font-medium text-[#D1D4DC] truncate text-right" title={strategyResult.regime}>
+                    {strategyResult.regime}
+                  </span>
                 </div>
                 
                 <div className="h-px bg-[#2A2E39] my-4" />
                 
                 <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-[#787B86]">Entry Zone</span>
-                    <span className="text-sm font-mono text-white">
+                  <div className="flex justify-between items-center gap-2">
+                    <span className="text-sm text-[#787B86] shrink-0">Entry Zone</span>
+                    <span className="text-sm font-mono text-white text-right">
                       {strategyResult.entry_low.toFixed(2)} - {strategyResult.entry_high.toFixed(2)}
                     </span>
                   </div>
@@ -484,6 +521,29 @@ export default function App() {
                     <span className="text-sm font-mono text-[#D1D4DC]">{strategyResult.rr.toFixed(2)}</span>
                   </div>
                 </div>
+
+                {strategyResult.logs && strategyResult.logs.length > 0 && (
+                  <div className="mt-6">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Clock className="w-3.5 h-3.5 text-[#787B86]" />
+                      <span className="text-[10px] font-bold text-[#787B86] uppercase tracking-wider">Strategy Logs</span>
+                    </div>
+                    <div className="bg-[#1E222D] rounded-lg p-3 space-y-2 max-h-60 overflow-y-auto border border-[#2A2E39]">
+                      {strategyResult.logs.map((log, i) => (
+                        <div key={i} className="text-[11px] font-mono leading-relaxed break-words">
+                          <span className="text-[#787B86] mr-2">[{i.toString().padStart(2, '0')}]</span>
+                          <span className={
+                            log.includes('🔥') || log.includes('✅') ? 'text-[#089981]' :
+                            log.includes('❌') || log.includes('⚠') ? 'text-[#F23645]' :
+                            'text-[#D1D4DC]'
+                          }>
+                            {log}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-8 text-center space-y-3">
