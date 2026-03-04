@@ -5,13 +5,27 @@ export type StrategyResult = {
   time: string;
   regime: string;
   price: number;
-  direction: 'LONG' | 'SHORT';
+  direction: 'LONG' | 'SHORT' | 'NEUTRAL';
   entry_low: number;
   entry_high: number;
   stop: number;
   target: number;
   rr: number;
   logs?: string[];
+  smcDetails?: {
+    currentSession: string;
+    targetSession: string;
+    targetHigh: number;
+    targetLow: number;
+    chochUp: number;
+    chochDown: number;
+    obLow: number;
+    obHigh: number;
+    obType: 'BULLISH' | 'BEARISH' | null;
+    sweepState: 'SWEEP_HIGH' | 'SWEEP_LOW' | 'NONE';
+    sweepHigh?: number;
+    sweepLow?: number;
+  };
 } | null;
 
 const BINANCE_URLS = [
@@ -186,6 +200,11 @@ function detectEngulfing(klines: any[]) {
   return { bullish, bearish };
 }
 
+const getDecimals = (symbol: string) => {
+  if (['ADAUSDT', 'DOGEUSDT'].includes(symbol)) return 4;
+  return 2;
+};
+
 async function runTrendRegimeStrategy(symbol: string): Promise<StrategyResult> {
   // Existing logic moved here
   const klines4h = await fetchKlinesWithFallback(symbol, '4h', 1000);
@@ -293,15 +312,16 @@ async function runTrendRegimeStrategy(symbol: string): Promise<StrategyResult> {
 
   const zoneMin = Math.min(entry_low, entry_high);
   const zoneMax = Math.max(entry_low, entry_high);
+  const decimals = getDecimals(symbol);
 
   const logs = [
     `Analyzing: ${symbol}`,
     `4H Regime: ${regime}`,
     `4H ADX: ${currentAdx.toFixed(2)}`,
     `4H EMA200 Slope: ${slope.toFixed(4)}%`,
-    `15m Price: ${price.toFixed(2)}`,
-    `15m ATR: ${atr.toFixed(2)}`,
-    `15m EMA20: ${ema20_15m[latest15mIdx].toFixed(2)}`,
+    `15m Price: ${price.toFixed(decimals)}`,
+    `15m ATR: ${atr.toFixed(decimals)}`,
+    `15m EMA20: ${ema20_15m[latest15mIdx].toFixed(decimals)}`,
     `Decision: ${direction === 1 ? 'LONG' : 'SHORT'} Signal Active`
   ];
 
@@ -321,6 +341,7 @@ async function runTrendRegimeStrategy(symbol: string): Promise<StrategyResult> {
 }
 
 async function runStructuralReversalStrategy(symbol: string): Promise<StrategyResult> {
+  const decimals = getDecimals(symbol);
   const logs: string[] = [`Analyzing: ${symbol}`];
   
   const klines4h = await fetchKlinesWithFallback(symbol, '4h', 500);
@@ -333,8 +354,8 @@ async function runStructuralReversalStrategy(symbol: string): Promise<StrategyRe
   let activeSwingLows = swingLows4h;
 
   logs.push(`4H Trend: ${trend}`);
-  logs.push(`Last 3 Swing Highs (4H): ${highs.slice(-3).map(v => v.toFixed(2)).join(', ')}`);
-  logs.push(`Last 3 Swing Lows (4H): ${lows.slice(-3).map(v => v.toFixed(2)).join(', ')}`);
+  logs.push(`Last 3 Swing Highs (4H): ${highs.slice(-3).map(v => v.toFixed(decimals)).join(', ')}`);
+  logs.push(`Last 3 Swing Lows (4H): ${lows.slice(-3).map(v => v.toFixed(decimals)).join(', ')}`);
   logs.push(`Current 4H RSI: ${rsi4h.toFixed(2)}`);
 
   if (trend === "RANGE") {
@@ -350,8 +371,8 @@ async function runStructuralReversalStrategy(symbol: string): Promise<StrategyRe
       const rangeHigh = highs.length > 0 ? highs[highs.length - 1] : Math.max(...klines4h.map(k => k.high));
       const rangeLow = lows.length > 0 ? lows[lows.length - 1] : Math.min(...klines4h.map(k => k.low));
       
-      logs.push(`Liquidity High (潛在做空區): ${rangeHigh.toFixed(2)}`);
-      logs.push(`Liquidity Low (潛在做多區): ${rangeLow.toFixed(2)}`);
+      logs.push(`Liquidity High (潛在做空區): ${rangeHigh.toFixed(decimals)}`);
+      logs.push(`Liquidity Low (潛在做多區): ${rangeLow.toFixed(decimals)}`);
       logs.push(`⏳ 結論：等待價格觸及邊界，尋找假突破 (Sweep) 訊號。`);
       
       const price = klines4h[klines4h.length - 1].close;
@@ -397,16 +418,16 @@ async function runStructuralReversalStrategy(symbol: string): Promise<StrategyRe
   }
 
   const { prz_low, prz_high } = calculatePRZ(impulse.low, impulse.high, direction!);
-  logs.push(`Impulse Leg Low: ${impulse.low.toFixed(2)}`);
-  logs.push(`Impulse Leg High: ${impulse.high.toFixed(2)}`);
-  logs.push(`PRZ Zone: ${prz_low.toFixed(2)} - ${prz_high.toFixed(2)}`);
+  logs.push(`Impulse Leg Low: ${impulse.low.toFixed(decimals)}`);
+  logs.push(`Impulse Leg High: ${impulse.high.toFixed(decimals)}`);
+  logs.push(`PRZ Zone: ${prz_low.toFixed(decimals)} - ${prz_high.toFixed(decimals)}`);
 
   const klines15m = await fetchKlinesWithFallback(symbol, '15m', 200);
   const price = klines15m[klines15m.length - 1].close;
   const rsi15m = calculateRSI(klines15m.map(k => k.close), 14).pop() || 0;
   const atr = calculateATR(klines15m.map(k => k.high), klines15m.map(k => k.low), klines15m.map(k => k.close), 14).pop() || 0;
 
-  logs.push(`15m Current Price: ${price.toFixed(2)}`);
+  logs.push(`15m Current Price: ${price.toFixed(decimals)}`);
   logs.push(`15m RSI: ${rsi15m.toFixed(2)}`);
 
   const div = detectDivergence(klines15m);
@@ -419,8 +440,8 @@ async function runStructuralReversalStrategy(symbol: string): Promise<StrategyRe
   const recentHigh = Math.max(...klines15m.slice(-20).map(k => k.high));
   const recentLow = Math.min(...klines15m.slice(-20).map(k => k.low));
   
-  logs.push(`15m Recent High: ${recentHigh.toFixed(2)}`);
-  logs.push(`15m Recent Low: ${recentLow.toFixed(2)}`);
+  logs.push(`15m Recent High: ${recentHigh.toFixed(decimals)}`);
+  logs.push(`15m Recent Low: ${recentLow.toFixed(decimals)}`);
 
   const bos_up = price > recentHigh;
   const bos_down = price < recentLow;
@@ -471,10 +492,260 @@ async function runStructuralReversalStrategy(symbol: string): Promise<StrategyRe
   };
 }
 
+function getSessionInfo(date: Date) {
+  const h = date.getUTCHours();
+  if (h >= 13 && h < 22) return { current: 'New York', target: 'London' };
+  if (h >= 7 && h < 13) return { current: 'London', target: 'Asia' };
+  if (h >= 0 && h < 7) return { current: 'Asia', target: 'New York' };
+  return { current: 'Off-Hours', target: 'New York' }; 
+}
+
+function getTargetSessionHighLow(klines: Kline[], targetSession: string, currentDate: Date) {
+  let startHour = 0, endHour = 0;
+  let targetDate = new Date(currentDate);
+  
+  if (targetSession === 'London') {
+    startHour = 7; endHour = 16;
+  } else if (targetSession === 'Asia') {
+    startHour = 0; endHour = 8;
+  } else if (targetSession === 'New York') {
+    startHour = 13; endHour = 22;
+    if (currentDate.getUTCHours() < 13) {
+      targetDate.setUTCDate(targetDate.getUTCDate() - 1);
+    }
+  }
+
+  const targetYear = targetDate.getUTCFullYear();
+  const targetMonth = targetDate.getUTCMonth();
+  const targetDay = targetDate.getUTCDate();
+
+  const sessionKlines = klines.filter(k => {
+    const d = new Date(k.time);
+    return d.getUTCFullYear() === targetYear &&
+           d.getUTCMonth() === targetMonth &&
+           d.getUTCDate() === targetDay &&
+           d.getUTCHours() >= startHour &&
+           d.getUTCHours() < endHour;
+  });
+
+  if (sessionKlines.length === 0) return null;
+
+  const high = Math.max(...sessionKlines.map(k => k.high));
+  const low = Math.min(...sessionKlines.map(k => k.low));
+  return { high, low };
+}
+
+function findOB(klines: Kline[], sweepIndex: number, type: 'BULLISH' | 'BEARISH') {
+  for (let i = sweepIndex; i >= Math.max(0, sweepIndex - 20); i--) {
+    const k = klines[i];
+    if (type === 'BEARISH' && k.close > k.open) {
+      return { low: k.low, high: k.high };
+    }
+    if (type === 'BULLISH' && k.close < k.open) {
+      return { low: k.low, high: k.high };
+    }
+  }
+  return null;
+}
+
+async function runSMCStrategy(symbol: string): Promise<StrategyResult> {
+  const decimals = getDecimals(symbol);
+  const logs: string[] = [`[SMC Rolling Session 策略執行中...]`, `📍 分析幣種: ${symbol}`];
+  
+  const now = new Date();
+  const { current: currentSession, target: targetSession } = getSessionInfo(now);
+  
+  const sessionColors: Record<string, string> = {
+    'Asia': '🟦 亞洲盤 (Asian Session)',
+    'London': '🟨 倫敦盤 (London Session)',
+    'New York': '🟥 紐約盤 (New York Session)',
+    'Off-Hours': '⬛ 盤整時段 (Off-Hours)'
+  };
+  
+  logs.push(`🕒 當前時區: ${sessionColors[currentSession] || currentSession}`);
+  logs.push(`----------------------------------------`);
+  logs.push(`🔍 1. 流動性目標狀態 (15m 級別)`);
+  
+  const klines15m = await fetchKlinesWithFallback(symbol, '15m', 500);
+  const targetHL = getTargetSessionHighLow(klines15m, targetSession, now);
+  
+  if (!targetHL) {
+    logs.push(`  - ⚠️ 無法獲取 ${targetSession} 的高低點資料`);
+    return {
+      symbol, time: now.toISOString(), regime: 'WAITING', price: 0, direction: 'NEUTRAL',
+      entry_low: 0, entry_high: 0, stop: 0, target: 0, rr: 0, logs
+    };
+  }
+  
+  const { high: targetHigh, low: targetLow } = targetHL;
+  logs.push(`  - 目標: ${sessionColors[targetSession] || targetSession}`);
+  logs.push(`  - ${targetSession} High: ${targetHigh.toFixed(decimals)}`);
+  logs.push(`  - ${targetSession} Low: ${targetLow.toFixed(decimals)}`);
+  
+  const klines5m = await fetchKlinesWithFallback(symbol, '5m', 200);
+  const currentPrice = klines5m[klines5m.length - 1].close;
+  
+  let sweepState: 'SWEEP_HIGH' | 'SWEEP_LOW' | 'NONE' = 'NONE';
+  let sweepHigh = 0;
+  let sweepLow = Infinity;
+  let sweepIndex = -1;
+  
+  const recent5m = klines5m.slice(-24);
+  const recentMax = Math.max(...recent5m.map(k => k.high));
+  const recentMin = Math.min(...recent5m.map(k => k.low));
+  
+  if (recentMax > targetHigh) {
+    sweepState = 'SWEEP_HIGH';
+    sweepHigh = recentMax;
+    sweepIndex = klines5m.findIndex(k => k.high === recentMax);
+    logs.push(`  - ⚠️ 狀態: 【高度關注】目前價格曾刺穿 ${targetSession} High (最高來到 ${sweepHigh.toFixed(decimals)})`);
+  } else if (recentMin < targetLow) {
+    sweepState = 'SWEEP_LOW';
+    sweepLow = recentMin;
+    sweepIndex = klines5m.findIndex(k => k.low === recentMin);
+    logs.push(`  - ⚠️ 狀態: 【高度關注】目前價格曾刺穿 ${targetSession} Low (最低來到 ${sweepLow.toFixed(decimals)})`);
+  } else {
+    logs.push(`  - 狀態: 價格在區間內震盪，等待流動性獵取 (Sweep)。`);
+  }
+  
+  logs.push(`----------------------------------------`);
+  logs.push(`⚖️ 2. 當前市場結構 (5m 級別)`);
+  
+  const { highs: swingHighs5m, lows: swingLows5m } = getSwingPoints(klines5m, 3);
+  const highs5m = klines5m.filter((_, i) => swingHighs5m[i]).map(k => k.high);
+  const lows5m = klines5m.filter((_, i) => swingLows5m[i]).map(k => k.low);
+  
+  const chochDown = lows5m.length > 0 ? lows5m[lows5m.length - 1] : 0;
+  const chochUp = highs5m.length > 0 ? highs5m[highs5m.length - 1] : 0;
+  
+  logs.push(`  - 最近波段低點 (看空 CHOCH 位): ${chochDown.toFixed(decimals)}`);
+  logs.push(`  - 最近波段高點 (看多延續位): ${chochUp.toFixed(decimals)}`);
+  
+  let obLow = 0, obHigh = 0;
+  let obType: 'BULLISH' | 'BEARISH' | null = null;
+  
+  if (sweepState === 'SWEEP_HIGH') {
+    const ob = findOB(klines5m, sweepIndex, 'BEARISH');
+    if (ob) {
+      obLow = ob.low; obHigh = ob.high; obType = 'BEARISH';
+      logs.push(`  - 潛在阻力 OB: ${obLow.toFixed(decimals)} - ${obHigh.toFixed(decimals)}`);
+    }
+  } else if (sweepState === 'SWEEP_LOW') {
+    const ob = findOB(klines5m, sweepIndex, 'BULLISH');
+    if (ob) {
+      obLow = ob.low; obHigh = ob.high; obType = 'BULLISH';
+      logs.push(`  - 潛在支撐 OB: ${obLow.toFixed(decimals)} - ${obHigh.toFixed(decimals)}`);
+    }
+  } else {
+    logs.push(`  - 尚未發生 Sweep，暫無高勝率 OB。`);
+  }
+  
+  logs.push(`----------------------------------------`);
+  logs.push(`🎯 3. 交易計畫推演 (If-Then Scenarios)`);
+  
+  let direction: 'LONG' | 'SHORT' | 'NEUTRAL' = 'NEUTRAL';
+  let entry_low = 0, entry_high = 0, stop = 0, target = 0, rr = 0;
+  
+  if (sweepState === 'SWEEP_HIGH') {
+    const isChoch = currentPrice < chochDown;
+    
+    // 預先計算潛在的交易計畫 (即使還沒 CHOCH)
+    if (obType === 'BEARISH') {
+      entry_low = obLow; 
+      entry_high = obHigh;
+      stop = sweepHigh + (sweepHigh * 0.001); // 加上 0.1% 緩衝
+      target = targetLow;
+      rr = (entry_low - target) / (stop - entry_low);
+      direction = 'SHORT'; // 預期做空
+    }
+
+    if (isChoch && obType === 'BEARISH') {
+      logs.push(`  🔴 狀態：已確認假突破轉空 (Sweep & CHOCH)`);
+      logs.push(`  - 交易計畫: 價格回踩頂部 OB 做空 (SHORT)。`);
+    } else {
+      logs.push(`  🔴 劇本 A：假突破轉空 (Sweep & Reversal)`);
+      logs.push(`  - 觸發條件: 5m K線向下跌破 CHOCH 位 (${chochDown.toFixed(decimals)})。`);
+      logs.push(`  - 交易計畫: 等待價格回踩頂部 OB 做空 (SHORT)。`);
+      logs.push(`  - 🛡️ 建議止損 (SL): 設於本次刺穿的最高點 (${sweepHigh.toFixed(decimals)}) + 緩衝。`);
+      logs.push(`  - 🎯 建議目標 (TP): 看向 ${targetSession} Low (${targetLow.toFixed(decimals)})。`);
+      
+      logs.push(`\n  🟢 劇本 B：真突破延續 (Breakout & Continuation)`);
+      logs.push(`  - 觸發條件: 價格撐在 ${targetSession} High (${targetHigh.toFixed(decimals)}) 之上。`);
+      logs.push(`  - 交易計畫: 等待價格回踩支撐做多 (LONG)。`);
+    }
+  } else if (sweepState === 'SWEEP_LOW') {
+    const isChoch = currentPrice > chochUp;
+    
+    // 預先計算潛在的交易計畫 (即使還沒 CHOCH)
+    if (obType === 'BULLISH') {
+      entry_low = obLow; 
+      entry_high = obHigh;
+      stop = sweepLow - (sweepLow * 0.001); // 減去 0.1% 緩衝
+      target = targetHigh;
+      rr = (target - entry_high) / (entry_high - stop);
+      direction = 'LONG'; // 預期做多
+    }
+
+    if (isChoch && obType === 'BULLISH') {
+      logs.push(`  🟢 狀態：已確認假跌破轉多 (Sweep & CHOCH)`);
+      logs.push(`  - 交易計畫: 價格回踩底部 OB 做多 (LONG)。`);
+    } else {
+      logs.push(`  🟢 劇本 A：假跌破轉多 (Sweep & Reversal)`);
+      logs.push(`  - 觸發條件: 5m K線向上突破 CHOCH 位 (${chochUp.toFixed(decimals)})。`);
+      logs.push(`  - 交易計畫: 等待價格回踩底部 OB 做多 (LONG)。`);
+      logs.push(`  - 🛡️ 建議止損 (SL): 設於本次刺穿的最低點 (${sweepLow.toFixed(decimals)}) - 緩衝。`);
+      logs.push(`  - 🎯 建議目標 (TP): 看向 ${targetSession} High (${targetHigh.toFixed(decimals)})。`);
+      
+      logs.push(`\n  🔴 劇本 B：真跌破延續 (Breakdown & Continuation)`);
+      logs.push(`  - 觸發條件: 價格壓在 ${targetSession} Low (${targetLow.toFixed(decimals)}) 之下。`);
+      logs.push(`  - 交易計畫: 等待價格回踩阻力做空 (SHORT)。`);
+    }
+  } else {
+    logs.push(`  - 價格目前在區間內，請耐心等待價格來到 ${targetHigh.toFixed(decimals)} 或 ${targetLow.toFixed(decimals)} 附近。`);
+  }
+  
+  logs.push(`----------------------------------------`);
+  if (direction === 'NEUTRAL') {
+    logs.push(`💡 結論: 目前處於決策邊界或震盪區間，請密切關注 CHOCH 位的突破情況。`);
+  } else {
+    logs.push(`💡 結論: 交易條件已成立，可依據 Entry Zone 佈局。`);
+  }
+
+  return {
+    symbol,
+    time: now.toISOString(),
+    regime: direction !== 'NEUTRAL' ? 'ACTIVE' : 'WAITING',
+    price: currentPrice,
+    direction,
+    entry_low,
+    entry_high,
+    stop,
+    target,
+    rr: rr > 0 ? rr : 0,
+    logs,
+    smcDetails: {
+      currentSession,
+      targetSession,
+      targetHigh,
+      targetLow,
+      chochUp,
+      chochDown,
+      obLow,
+      obHigh,
+      obType,
+      sweepState,
+      sweepHigh,
+      sweepLow
+    }
+  };
+}
+
 export async function runStrategy(symbol: string, strategyId: string = 'trend_regime'): Promise<StrategyResult> {
   try {
     if (strategyId === 'structural_reversal') {
       return await runStructuralReversalStrategy(symbol);
+    } else if (strategyId === 'smc_session') {
+      return await runSMCStrategy(symbol);
     } else {
       return await runTrendRegimeStrategy(symbol);
     }

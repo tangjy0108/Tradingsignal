@@ -41,7 +41,12 @@ const CandlestickShape = (props: any) => {
   );
 };
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT'];
+const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'];
+
+const getDecimals = (symbol: string) => {
+  if (['ADAUSDT', 'DOGEUSDT'].includes(symbol)) return 4;
+  return 2;
+};
 const INTERVALS = [
   { label: '5m', value: '5m' },
   { label: '15m', value: '15m' },
@@ -53,10 +58,12 @@ const INTERVALS = [
 const STRATEGIES = [
   { id: 'trend_regime', name: 'Trend Regime (Current)' },
   { id: 'structural_reversal', name: 'Structural Reversal (PRZ)' },
+  { id: 'smc_session', name: 'SMC Rolling Session' },
 ];
 
 export default function App() {
   const [symbol, setSymbol] = useState('BTCUSDT');
+  const decimals = getDecimals(symbol);
   const [interval, setInterval] = useState('15m');
   const [strategyId, setStrategyId] = useState('trend_regime');
   const [chartType, setChartType] = useState<'candles' | 'line'>('candles');
@@ -116,13 +123,19 @@ export default function App() {
     let max = Math.max(...chartData.map(d => d.high));
     
     // Include strategy result in yDomain so it's visible, but only if values are non-zero
-    if (strategyResult && strategyResult.target > 0 && strategyResult.stop > 0) {
+    if (strategyResult) {
       const values = [
         strategyResult.target,
         strategyResult.stop,
         strategyResult.entry_low,
-        strategyResult.entry_high
-      ].filter(v => v > 0);
+        strategyResult.entry_high,
+        strategyResult.smcDetails?.targetHigh,
+        strategyResult.smcDetails?.targetLow,
+        strategyResult.smcDetails?.chochUp,
+        strategyResult.smcDetails?.chochDown,
+        strategyResult.smcDetails?.obLow,
+        strategyResult.smcDetails?.obHigh,
+      ].filter(v => typeof v === 'number' && v > 0) as number[];
       
       if (values.length > 0) {
         min = Math.min(min, ...values);
@@ -278,9 +291,9 @@ export default function App() {
                   <div className="flex items-baseline gap-3">
                     <div className="text-2xl font-bold text-white">{symbol}</div>
                     <div className={`text-lg font-medium ${priceChange >= 0 ? 'text-[#089981]' : 'text-[#F23645]'}`}>
-                      {currentPrice.toFixed(2)} 
+                      {currentPrice.toFixed(decimals)} 
                       <span className="text-sm ml-2">
-                        {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)} ({priceChangePercent.toFixed(2)}%)
+                        {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(decimals)} ({priceChangePercent.toFixed(2)}%)
                       </span>
                     </div>
                   </div>
@@ -307,13 +320,26 @@ export default function App() {
                       domain={yDomain} 
                       stroke="#434651" 
                       tick={{ fill: '#787B86', fontSize: 11, fontWeight: 500 }} 
-                      tickFormatter={(val) => val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      tickFormatter={(val) => val.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
                       orientation="right"
                       axisLine={false}
                       tickLine={false}
                       tickMargin={12}
                     />
                     
+                    {/* SMC Session Background */}
+                    {strategyResult?.smcDetails && (
+                      <ReferenceArea 
+                        {...({
+                          fill: strategyResult.smcDetails.currentSession === 'Asia' ? '#2196F3' :
+                                strategyResult.smcDetails.currentSession === 'London' ? '#FFC107' :
+                                strategyResult.smcDetails.currentSession === 'New York' ? '#F44336' : 'transparent',
+                          fillOpacity: 0.05,
+                          stroke: "none"
+                        } as any)}
+                      />
+                    )}
+
                     {/* Strategy Visualizations - Only show if we have valid points */}
                     {strategyResult && strategyResult.target > 0 && strategyResult.stop > 0 && (
                       <>
@@ -348,6 +374,73 @@ export default function App() {
                         )}
                       </>
                     )}
+
+                    {/* SMC Specific Markers */}
+                    {strategyResult?.smcDetails && (
+                      <>
+                        {strategyResult.smcDetails.targetHigh > 0 && (
+                          <ReferenceLine 
+                            y={strategyResult.smcDetails.targetHigh} 
+                            stroke="#FF9800" 
+                            strokeDasharray="3 3" 
+                            label={{ position: 'insideTopLeft', value: `${strategyResult.smcDetails.targetSession} High`, fill: '#FF9800', fontSize: 11, fontWeight: 600 }} 
+                          />
+                        )}
+                        {strategyResult.smcDetails.targetLow > 0 && (
+                          <ReferenceLine 
+                            y={strategyResult.smcDetails.targetLow} 
+                            stroke="#FF9800" 
+                            strokeDasharray="3 3" 
+                            label={{ position: 'insideBottomLeft', value: `${strategyResult.smcDetails.targetSession} Low`, fill: '#FF9800', fontSize: 11, fontWeight: 600 }} 
+                          />
+                        )}
+                        {strategyResult.smcDetails.sweepState === 'SWEEP_HIGH' && strategyResult.smcDetails.chochDown > 0 && (
+                          <ReferenceLine 
+                            y={strategyResult.smcDetails.chochDown} 
+                            stroke="#F23645" 
+                            strokeDasharray="4 4" 
+                            strokeWidth={2}
+                            label={{ position: 'insideBottomRight', value: '跌破此線轉空 (CHOCH)', fill: '#F23645', fontSize: 12, fontWeight: 700, backgroundColor: 'rgba(30, 34, 45, 0.8)', padding: 4 }} 
+                          />
+                        )}
+                        {strategyResult.smcDetails.sweepState === 'SWEEP_LOW' && strategyResult.smcDetails.chochUp > 0 && (
+                          <ReferenceLine 
+                            y={strategyResult.smcDetails.chochUp} 
+                            stroke="#089981" 
+                            strokeDasharray="4 4" 
+                            strokeWidth={2}
+                            label={{ position: 'insideTopRight', value: '突破此線轉多 (CHOCH)', fill: '#089981', fontSize: 12, fontWeight: 700, backgroundColor: 'rgba(30, 34, 45, 0.8)', padding: 4 }} 
+                          />
+                        )}
+                        {strategyResult.smcDetails.obLow > 0 && strategyResult.smcDetails.obHigh > 0 && (
+                          <ReferenceArea 
+                            y1={strategyResult.smcDetails.obLow} 
+                            y2={strategyResult.smcDetails.obHigh} 
+                            {...({
+                              fill: strategyResult.smcDetails.obType === 'BULLISH' ? '#089981' : '#F23645',
+                              fillOpacity: 0.3,
+                              stroke: strategyResult.smcDetails.obType === 'BULLISH' ? '#089981' : '#F23645',
+                              strokeWidth: 1,
+                              strokeOpacity: 0.8
+                            } as any)}
+                          />
+                        )}
+                        {/* Add label for OB */}
+                        {strategyResult.smcDetails.obLow > 0 && strategyResult.smcDetails.obHigh > 0 && (
+                           <ReferenceLine
+                             y={strategyResult.smcDetails.obType === 'BULLISH' ? strategyResult.smcDetails.obLow : strategyResult.smcDetails.obHigh}
+                             stroke="none"
+                             label={{ 
+                               position: strategyResult.smcDetails.obType === 'BULLISH' ? 'insideBottomLeft' : 'insideTopLeft', 
+                               value: strategyResult.smcDetails.obType === 'BULLISH' ? '🟢 潛在做多區 (OB)' : '🔴 潛在做空區 (OB)', 
+                               fill: strategyResult.smcDetails.obType === 'BULLISH' ? '#089981' : '#F23645', 
+                               fontSize: 12, 
+                               fontWeight: 700 
+                             }}
+                           />
+                        )}
+                      </>
+                    )}
                     
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', borderRadius: '8px', color: '#D1D4DC', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)' }}
@@ -357,11 +450,11 @@ export default function App() {
                         if (name === 'Price' || name === 'closePrice') {
                           const { open, high, low, close } = props.payload;
                           return [
-                            `O: ${open.toFixed(2)}  H: ${high.toFixed(2)}  L: ${low.toFixed(2)}  C: ${close.toFixed(2)}`,
+                            `O: ${open.toFixed(decimals)}  H: ${high.toFixed(decimals)}  L: ${low.toFixed(decimals)}  C: ${close.toFixed(decimals)}`,
                             'OHLC'
                           ];
                         }
-                        return [Number(value).toFixed(2), name];
+                        return [Number(value).toFixed(decimals), name];
                       }}
                     />
                     
@@ -496,16 +589,16 @@ export default function App() {
                   <div className="flex justify-between items-center gap-2">
                     <span className="text-sm text-[#787B86] shrink-0">Entry Zone</span>
                     <span className="text-sm font-mono text-white text-right">
-                      {strategyResult.entry_low.toFixed(2)} - {strategyResult.entry_high.toFixed(2)}
+                      {strategyResult.entry_low.toFixed(decimals)} - {strategyResult.entry_high.toFixed(decimals)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-[#787B86]">Target</span>
-                    <span className="text-sm font-mono text-[#089981]">{strategyResult.target.toFixed(2)}</span>
+                    <span className="text-sm font-mono text-[#089981]">{strategyResult.target.toFixed(decimals)}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-[#787B86]">Stop Loss</span>
-                    <span className="text-sm font-mono text-[#F23645]">{strategyResult.stop.toFixed(2)}</span>
+                    <span className="text-sm font-mono text-[#F23645]">{strategyResult.stop.toFixed(decimals)}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-[#787B86]">Risk/Reward</span>
