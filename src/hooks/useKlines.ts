@@ -18,17 +18,45 @@ const BINANCE_URLS = [
   'https://api4.binance.com'
 ];
 
+// Helper to fetch with timeout
+async function fetchWithTimeout(resource: string, options: RequestInit & { timeout?: number } = {}) {
+  const { timeout = 5000 } = options;
+  
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  
+  try {
+    const response = await fetch(resource, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
+
 async function fetchWithFallback(symbol: string, interval: string, limit: number) {
   let lastError;
   for (const baseUrl of BINANCE_URLS) {
     try {
-      const response = await fetch(`${baseUrl}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+      const response = await fetchWithTimeout(`${baseUrl}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`, { timeout: 3000 });
       if (response.ok) {
         return await response.json();
+      } else {
+        // If it's a 400 error (e.g. invalid symbol), don't keep trying other endpoints
+        if (response.status === 400) {
+          throw new Error(`Invalid symbol or interval on Binance: ${symbol}`);
+        }
       }
-    } catch (e) {
+    } catch (e: any) {
       lastError = e;
-      console.warn(`Failed to fetch from ${baseUrl}, trying next...`);
+      // If it's an abort error or network error, continue to next URL
+      if (e.name !== 'AbortError') {
+        console.warn(`Failed to fetch from ${baseUrl}:`, e.message);
+      }
     }
   }
   throw lastError || new Error('All Binance endpoints failed');
@@ -67,7 +95,7 @@ export function useKlines(symbol: string, interval: string, limit: number = 200)
           const kucoinInterval = interval === '1h' ? '1hour' : interval === '4h' ? '4hour' : interval === '1d' ? '1day' : interval.replace('m', 'min');
           
           const kucoinUrl = `https://api.kucoin.com/api/v1/market/candles?type=${kucoinInterval}&symbol=${kucoinSymbol}`;
-          const response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(kucoinUrl)}`);
+          const response = await fetchWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(kucoinUrl)}`, { timeout: 5000 });
           
           if (!response.ok) {
             throw new Error('KuCoin failed');
@@ -75,6 +103,10 @@ export function useKlines(symbol: string, interval: string, limit: number = 200)
           const json = await response.json();
           if (json.code !== '200000') {
             throw new Error(json.msg || 'Failed to fetch data from KuCoin');
+          }
+          
+          if (!json.data || !Array.isArray(json.data) || json.data.length === 0) {
+            throw new Error(`No data available for ${symbol}`);
           }
           
           klines = json.data

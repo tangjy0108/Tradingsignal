@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Bar, Cell, ReferenceArea, ReferenceLine } from 'recharts';
-import { Activity, Settings, ChevronDown, Plus, Play, ShieldAlert, TrendingUp, Clock, BarChart2, LineChart as LineChartIcon, CandlestickChart, AlertCircle } from 'lucide-react';
+import { Activity, Settings, ChevronDown, Plus, Play, ShieldAlert, TrendingUp, Clock, BarChart2, LineChart as LineChartIcon, CandlestickChart, AlertCircle, Star, Search } from 'lucide-react';
 import { useKlines } from './hooks/useKlines';
 import { calculateSMA, calculateRSI, calculateMACD } from './lib/indicators';
 import { runStrategy, StrategyResult } from './lib/strategy';
@@ -41,7 +41,12 @@ const CandlestickShape = (props: any) => {
   );
 };
 
-const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'];
+const SYMBOLS = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT',
+  'XRPUSDT', 'DOTUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT', 'UNIUSDT',
+  'ATOMUSDT', 'ETCUSDT', 'XLMUSDT', 'ALGOUSDT', 'FILUSDT', 'NEARUSDT',
+  'VETUSDT', 'ICPUSDT', 'TRXUSDT', 'AAVEUSDT', 'EOSUSDT', 'FTMUSDT'
+];
 
 const getDecimals = (symbol: string) => {
   if (['ADAUSDT', 'DOGEUSDT'].includes(symbol)) return 4;
@@ -72,6 +77,173 @@ export default function App() {
   const [showMACD, setShowMACD] = useState(false);
   const [strategyResult, setStrategyResult] = useState<StrategyResult | null>(null);
   const [isStrategyRunning, setIsStrategyRunning] = useState(false);
+
+  // Symbol Search State
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    const saved = localStorage.getItem('favoriteSymbols');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Clean up any bad data from previous bugs
+        return parsed.map((s: string) => s.endsWith('USDT') ? s : s + 'USDT');
+      } catch (e) {}
+    }
+    return ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+  });
+  const [customSymbols, setCustomSymbols] = useState<string[]>(() => {
+    const saved = localStorage.getItem('customSymbols');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Clean up any bad data from previous bugs
+        return parsed.map((s: string) => s.endsWith('USDT') ? s : s + 'USDT');
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [availableSymbols, setAvailableSymbols] = useState<string[]>(SYMBOLS);
+  
+  const searchRef = useRef<HTMLDivElement>(null);
+
+  // Fetch all Binance USDT pairs on load
+  useEffect(() => {
+    const fetchSymbols = async () => {
+      // Use ticker/price instead of exchangeInfo because it's much smaller (~100KB vs ~2MB) and less likely to be blocked/timeout
+      const endpoints = [
+        'https://data-api.binance.vision/api/v3/ticker/price',
+        'https://api.binance.com/api/v3/ticker/price',
+        'https://api1.binance.com/api/v3/ticker/price',
+        'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://api.binance.com/api/v3/ticker/price')
+      ];
+      
+      for (const url of endpoints) {
+        try {
+          const controller = new AbortController();
+          const id = setTimeout(() => controller.abort(), 5000);
+          
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(id);
+          
+          if (res.ok) {
+            let data = await res.json();
+            
+            // Handle allorigins proxy response format
+            if (data.contents) {
+              try {
+                data = JSON.parse(data.contents);
+              } catch (e) {
+                console.warn('Failed to parse proxy contents');
+              }
+            }
+
+            if (Array.isArray(data)) {
+              const usdtSymbols = data
+                .filter((s: any) => s.symbol && s.symbol.endsWith('USDT'))
+                .map((s: any) => s.symbol);
+              if (usdtSymbols.length > 0) {
+                setAvailableSymbols(Array.from(new Set([...SYMBOLS, ...usdtSymbols])));
+                return; // Success, exit loop
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(`Failed to fetch from ${url}`);
+        }
+      }
+      console.error('All Binance ticker endpoints failed');
+    };
+    
+    fetchSymbols();
+  }, []);
+
+  // Handle clicking outside of search dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setIsSearchOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Save favorites and custom symbols to localStorage
+  useEffect(() => {
+    localStorage.setItem('favoriteSymbols', JSON.stringify(favorites));
+  }, [favorites]);
+
+  useEffect(() => {
+    localStorage.setItem('customSymbols', JSON.stringify(customSymbols));
+  }, [customSymbols]);
+
+  const toggleFavorite = (e: React.MouseEvent, sym: string) => {
+    e.stopPropagation();
+    setFavorites(prev => 
+      prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]
+    );
+  };
+
+  const allSymbols = useMemo(() => {
+    return Array.from(new Set([...availableSymbols, ...customSymbols]));
+  }, [availableSymbols, customSymbols]);
+
+  const filteredSymbols = useMemo(() => {
+    const query = searchQuery.toUpperCase().trim();
+    
+    if (!query) {
+      return allSymbols.sort((a, b) => {
+        const aFav = favorites.includes(a);
+        const bFav = favorites.includes(b);
+        if (aFav && !bFav) return -1;
+        if (!aFav && bFav) return 1;
+        return a.localeCompare(b);
+      }).slice(0, 100); // Limit to 100 to prevent rendering lag
+    }
+
+    const filtered = allSymbols.filter(s => s.includes(query));
+    
+    return filtered.sort((a, b) => {
+      // 1. Exact match or Exact base asset match (e.g. query "PEPE" -> "PEPEUSDT")
+      const aExact = a === query || a === `${query}USDT`;
+      const bExact = b === query || b === `${query}USDT`;
+      if (aExact && !bExact) return -1;
+      if (!aExact && bExact) return 1;
+
+      // 2. Starts with query
+      const aStarts = a.startsWith(query);
+      const bStarts = b.startsWith(query);
+      if (aStarts && !bStarts) return -1;
+      if (!aStarts && bStarts) return 1;
+
+      // 3. Favorites
+      const aFav = favorites.includes(a);
+      const bFav = favorites.includes(b);
+      if (aFav && !bFav) return -1;
+      if (!aFav && bFav) return 1;
+
+      // 4. Alphabetical
+      return a.localeCompare(b);
+    }).slice(0, 100);
+  }, [searchQuery, favorites, allSymbols]);
+
+  const handleAddCustomSymbol = () => {
+    let newSymbol = searchQuery.toUpperCase().trim();
+    if (!newSymbol) return;
+    
+    // Auto append USDT if it doesn't end with it and doesn't exist
+    if (!newSymbol.endsWith('USDT') && !allSymbols.includes(newSymbol)) {
+      newSymbol += 'USDT';
+    }
+
+    if (!allSymbols.includes(newSymbol)) {
+      setCustomSymbols(prev => [...prev, newSymbol]);
+    }
+    setSymbol(newSymbol);
+    setIsSearchOpen(false);
+    setSearchQuery('');
+  };
 
   // Clear strategy result when symbol or interval changes to prevent chart scaling issues
   useEffect(() => {
@@ -171,14 +343,17 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-4 overflow-x-auto custom-scrollbar px-4 sm:px-6 pb-3 lg:pb-0 lg:px-0 lg:h-16 w-full lg:w-auto">
-          {/* Symbol Selector */}
+          {/* Symbol Selector (Favorites Only) */}
           <div className="relative group shrink-0">
             <select 
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
               className="bg-transparent text-[#D1D4DC] font-semibold text-lg outline-none cursor-pointer hover:text-white transition-colors appearance-none pr-6"
             >
-              {SYMBOLS.map(s => <option key={s} value={s} className="bg-[#131722] text-sm">{s}</option>)}
+              {/* Always show the current symbol at the top if it's not in favorites, otherwise just show favorites */}
+              {Array.from(new Set(favorites.includes(symbol) ? favorites : [symbol, ...favorites])).map(s => (
+                <option key={s} value={s} className="bg-[#131722] text-sm">{s}</option>
+              ))}
             </select>
             <ChevronDown className="w-4 h-4 text-[#787B86] absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-[#D1D4DC] transition-colors" />
           </div>
@@ -259,6 +434,85 @@ export default function App() {
               <Activity className="w-4 h-4" />
               MACD
             </button>
+
+            <div className="w-px h-4 bg-[#2A2E39] mx-1" />
+
+            {/* Search Symbol Button */}
+            <div className="relative" ref={searchRef}>
+              <button 
+                onClick={() => setIsSearchOpen(!isSearchOpen)}
+                className={`p-1.5 rounded-md transition-all duration-200 ${isSearchOpen ? 'bg-[#2A2E39] text-white' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}
+                title="Search Symbol"
+              >
+                <Search className="w-4 h-4" />
+              </button>
+
+              {isSearchOpen && (
+                <div className="absolute top-full right-0 mt-2 w-64 bg-[#1E222D] border border-[#2A2E39] rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
+                  <div className="p-3 border-b border-[#2A2E39]">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-[#787B86] absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Search (e.g. PEPE)..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            if (filteredSymbols.length > 0) {
+                              setSymbol(filteredSymbols[0]);
+                              setIsSearchOpen(false);
+                              setSearchQuery('');
+                            } else if (searchQuery.trim()) {
+                              handleAddCustomSymbol();
+                            }
+                          }
+                        }}
+                        className="w-full bg-[#131722] text-[#D1D4DC] text-sm rounded-lg pl-9 pr-3 py-2 outline-none border border-[#2A2E39] focus:border-[#2962FF] transition-colors"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                    {filteredSymbols.length > 0 ? (
+                      filteredSymbols.map(s => {
+                        const isFav = favorites.includes(s);
+                        return (
+                          <button
+                            key={s}
+                            onClick={() => {
+                              setSymbol(s);
+                              setIsSearchOpen(false);
+                              setSearchQuery('');
+                            }}
+                            className={`w-full flex items-center justify-between px-4 py-2.5 text-left text-sm transition-colors ${
+                              symbol === s ? 'bg-[#2962FF]/10 text-[#2962FF] font-medium' : 'text-[#D1D4DC] hover:bg-[#2A2E39]'
+                            }`}
+                          >
+                            {s}
+                            <Star 
+                              onClick={(e) => toggleFavorite(e, s)}
+                              className={`w-4 h-4 transition-colors ${isFav ? 'fill-[#FFC107] text-[#FFC107]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`} 
+                            />
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="px-4 py-3 text-sm text-[#787B86] text-center">No symbols found</div>
+                    )}
+                    {searchQuery.trim() && !allSymbols.some(s => s.toLowerCase() === searchQuery.toLowerCase().trim()) && (
+                      <button
+                        onClick={handleAddCustomSymbol}
+                        className="w-full flex items-center gap-2 px-4 py-3 text-left text-sm text-[#2962FF] hover:bg-[#2A2E39] transition-colors border-t border-[#2A2E39]"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add "{searchQuery.toUpperCase().trim()}"
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -288,8 +542,16 @@ export default function App() {
               {/* Main Price Chart */}
               <div className="w-full h-[400px] lg:h-[500px] bg-[#131722] rounded-xl border border-[#2A2E39] p-4 relative shrink-0 shadow-sm">
                 <div className="absolute top-4 left-4 z-10 flex flex-col gap-1 pointer-events-none">
-                  <div className="flex items-baseline gap-3">
-                    <div className="text-2xl font-bold text-white">{symbol}</div>
+                  <div className="flex items-baseline gap-3 pointer-events-auto">
+                    <div className="text-2xl font-bold text-white flex items-center gap-2">
+                      {symbol}
+                      <button 
+                        onClick={(e) => toggleFavorite(e, symbol)}
+                        className="focus:outline-none hover:scale-110 transition-transform"
+                      >
+                        <Star className={`w-5 h-5 transition-colors ${favorites.includes(symbol) ? 'fill-[#FFC107] text-[#FFC107]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`} />
+                      </button>
+                    </div>
                     <div className={`text-lg font-medium ${priceChange >= 0 ? 'text-[#089981]' : 'text-[#F23645]'}`}>
                       {currentPrice.toFixed(decimals)} 
                       <span className="text-sm ml-2">
